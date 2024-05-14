@@ -2,8 +2,8 @@
 pragma solidity ^0.8.13;
 
 import {Test, console2 as console} from "forge-std/Test.sol";
-import {Exorcist} from "../src/Exorcist.sol";
-import {ExorcistFactory} from "./../src/ExorcistFactory.sol";
+import {Exorcist} from "../src/Exorcist/Exorcist.sol";
+import {ExorcistFactory} from "./../src/Exorcist/ExorcistFactory.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
 contract ExorcistTest is Test {

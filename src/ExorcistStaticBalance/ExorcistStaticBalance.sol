@@ -4,7 +4,7 @@ pragma solidity 0.8.x;
 import {ERC20} from "solady/tokens/ERC20.sol";
 
 // Exorcises a soulbound token from it's bounded address, enables transferability
-contract Exorcist is ERC20 {
+contract ExorcistStaticBalance is ERC20 {
     uint256 private constant _BALANCE_SLOT_SEED = 0x87a211a2;
     uint256 private constant _BALANCE_OF_FUNCTION_SELECTOR = 0x70a08231;
     uint256 private constant _LegionBalanceOfCallReverted_ERROR_SIGNATURE = 0xe037a455;
@@ -14,7 +14,7 @@ contract Exorcist is ERC20 {
 
     string LEGION_NAME;
     string LEGION_SYMBOL;
-    mapping(address => uint256) lastSoulboundBalance;
+    mapping(address => bool) isExorcised;
 
     error LegionBalanceOfCallReverted();
 
@@ -50,7 +50,8 @@ contract Exorcist is ERC20 {
 
     /// @dev Returns the amount of tokens owned by `owner`.
     function balanceOf(address _addr) public view override returns (uint256 result) {
-        (uint256 _exorcised,) = _getExorcisable(_addr);
+        uint256 _exorcised;
+        if (!isExorcised[_addr]) (_exorcised,) = _getExorcisable(_addr);
         unchecked {
             result = super.balanceOf(_addr) + _exorcised;
         }
@@ -59,22 +60,20 @@ contract Exorcist is ERC20 {
     /// @dev Hook that is called before any transfer of tokens.
     /// This includes minting and burning.
     function _beforeTokenTransfer(address _from, address _to, uint256) internal virtual override {
-        _exorcise(_from);
-        _exorcise(_to);
+        if (!isExorcised[_to]) _exorcise(_from);
+        if (!isExorcised[_from]) _exorcise(_to);
     }
 
-    /// @dev tops up the user's current balance by the new soulbound tokens they acquired since last updated (if any)
-    /// @dev can make it an external function for users to call for themselves or someone else,
-    ///      or can be made to be updated before every transfer, transferFrom, mint or burn in the _beforeTokenTranfer hook
+    /// @dev tops up the user's current balance by the soulbound tokens the have
     function _exorcise(address _addr) internal virtual {
-        (uint256 _exorcised, bytes32 _addrLastSoulboundBalanceSlot) = _getExorcisable(_addr);
+        (uint256 _exorcised, bytes32 _isExorcisedSlot) = _getExorcisable(_addr);
 
         /// @solidity memory-safe-assembly
         assembly {
             if _exorcised {
-                // update last known soulbound balance
-                let _addrLastSoulboundBalance := sload(_addrLastSoulboundBalanceSlot)
-                sstore(_addrLastSoulboundBalanceSlot, add(_addrLastSoulboundBalance, _exorcised)) // unchecked add is safe because the result is a valid value from the legion contract
+                // set to have been exorcised
+                let _addrLastSoulboundBalance := sload(_isExorcisedSlot)
+                sstore(_isExorcisedSlot, true)
 
                 // update balance
                 let addr_ := shl(96, _addr)
@@ -85,34 +84,26 @@ contract Exorcist is ERC20 {
         }
     }
 
-    function _getExorcisable(address _addr)
-        private
-        view
-        returns (uint256 _exorcised, bytes32 _addrLastSoulboundBalanceSlot)
-    {
+    function _getExorcisable(address _addr) private view returns (uint256 _exorcised, bytes32 _isExorcisedSlot) {
         ERC20 _legionContract = LEGION_CONTRACT;
 
         /// @solidity memory-safe-assembly
         assembly {
-            // get _addr's balanceOf
-            mstore(0x00, _BALANCE_OF_FUNCTION_SELECTOR)
-            mstore(0x20, _addr)
-            if iszero(staticcall(gas(), _legionContract, 0x1c, 0x24, 0x00, 0x20)) {
-                mstore(0x00, _LegionBalanceOfCallReverted_ERROR_SIGNATURE)
-                revert(0x1c, 0x04)
-            }
-            let _soulboundBalance := mload(0x00)
-
             // get _addr's lastSoulboundBalance
             mstore(0x00, _addr)
-            mstore(0x20, lastSoulboundBalance.slot)
-            _addrLastSoulboundBalanceSlot := keccak256(0x00, 0x40)
-            let _addrLastSoulboundBalance := sload(_addrLastSoulboundBalanceSlot)
+            mstore(0x20, isExorcised.slot)
+            _isExorcisedSlot := keccak256(0x00, 0x40)
+            let _isExorcised := sload(_isExorcisedSlot)
 
-            if gt(_soulboundBalance, _addrLastSoulboundBalance) {
-                // assume it increased since last checked, soulbound tokens shouldn't decrease in balance
-                // unchecked sub, will wrap around to type(uint256).max if soulbound balance reduces (should not be possible)
-                _exorcised := sub(_soulboundBalance, _addrLastSoulboundBalance)
+            if iszero(_isExorcisedSlot) {
+                // get _addr's balanceOf
+                mstore(0x00, _BALANCE_OF_FUNCTION_SELECTOR)
+                mstore(0x20, _addr)
+                if iszero(staticcall(gas(), _legionContract, 0x1c, 0x24, 0x00, 0x20)) {
+                    mstore(0x00, _LegionBalanceOfCallReverted_ERROR_SIGNATURE)
+                    revert(0x1c, 0x04)
+                }
+                _exorcised := mload(0x00)
             }
         }
     }
